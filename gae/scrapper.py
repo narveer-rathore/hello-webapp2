@@ -1,43 +1,174 @@
-import cgi
-import datetime
-import urllib
-import wsgiref.handlers
+from constants import TOP_APPS_URL, APP_DETAIL_URL
 
-from google.appengine.ext import db
-from google.appengine.api import users
-import webapp2
+import urlparse
 
-class App(db.Model):
-    title = db.StringProperty()
-    created_at = db.DateTimeProperty(auto_now_add=True)
-    imgPath = db.StringProperty()
-    review_count = db.In
+import re
+import requests
+import json
+from serializers import serialize_app
+from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
+
+def TopAppsScrapper(test):
+
+  try:
+    html_text = requests.get(TOP_APPS_URL).text
+    soup = BeautifulSoup(html_text, 'html.parser')
+  except Exception as e:
+    return e
+
+  items = soup.find(attrs={"jsdata": "deferred-i7"})
+
+  attributes_to_del = ["data-p", "js-action", "style", "jsdata", "jslog"]
+
+  for attr_del in attributes_to_del:
+    [s.attrs.pop(attr_del) for s in soup.find_all() if attr_del in s.attrs]
+
+  categories = []
+  for index, cat in enumerate(items):
+    if cat.name == "c-wiz":
+      category = {}
+      category["apps"] = []
+      category["view_order"] = index
+      try:
+        main = cat.div
+        header = main.findChild().findChild().find("a")
+        category["title"] = header.find("h2").text
+        category["more_link"] = header["href"]
+
+        category["slug"] = category["title"].lower().replace(" ", "_")
+        child = main.contents[1].select("c-wiz > div > div")
+        for c in child:
+          div = c.contents[1]
+          pkg = {}
+          image = c.find("img")["data-src"]
+
+          if image and "image" not in pkg:
+            pkg["image"] = image
+
+          pkg["title"] = div.select("[title]")[0].text.encode('utf-8').strip()
+          links = div.select("[href]")
+
+          for l in links:
+            url = urlparse.urlparse(l["href"])
+
+            if url.path.startswith("/store/apps/details"):
+              if not "package" in pkg:
+                pkg["download_link"] = l["href"]
+                pkg["package"] = url.query[3:].encode('utf-8').strip()
 
 
+            if url.path.startswith("/store/apps/developer"):
+              if not "developer" in pkg:
+                pkg["developer"] = url.query[3:].replace("+", " ").encode('utf-8').strip()
 
-class Greeting(db.Model):
-  """Models an individual Guestbook entry with an author, content, and date."""
-  author = db.UserProperty()
-  content = db.StringProperty(multiline=True)
-  date = db.DateTimeProperty(auto_now_add=True)
+            des = l.find('div')
+            if not l.find('div'):
+              if l.text:
+                pkg["description"] = l.text.encode('utf-8').strip()
+
+          category["apps"].append(pkg)
+
+      except Exception as e:
+        return e
+
+      print("\n{} total {}".format(category["title"], len(category["apps"])))
+      categories.append(category)
+
+  if not test:
+    from models import Category, App
+    from utils import unic, app_key, category_key
+
+    try:
+      for c in categories:
+        slug = unic(c["slug"])
+        key = category_key(slug)
+
+        cat = Category.get_by_key_name(slug)
+
+        if not cat:
+          cat = Category(key=key, slug=slug, title=c["title"])
+          cat.view_order = c["view_order"]
+          cat.more_link = "https://play.google.com{}".format(c.get("more_link", ""))
+          cat.put()
+
+        for app in c["apps"]:
+          name = app["package"]
+          obj = App.get_or_insert(name, pkg=name)
+          obj.category = cat
+          obj.key = app_key(name)
+          obj.pkg = unic(name)
+          obj.title = unic(app["title"])
+          obj.image = app.get("image", None)
+          obj.download_link = app.get("download_link", None)
+          obj.developer = unic(app.get("developer", None))
+          obj.put()
+
+    except Exception as e:
+      return e
+    else:
+      return categories
 
 
-def guestbook_key(guestbook_name=None):
-  """Constructs a datastore key for a Guestbook entity with guestbook_name."""
-  return db.Key.from_path('Guestbook', guestbook_name or 'default_guestbook')
+def AppDetailScrapper(pkg, test):
+  url = APP_DETAIL_URL.format(pkg)
+  # url = "http://127.0.0.1:5501/Josh%20-%20Snack%20on%20Short%20Videos%20with%20Top%20Indian%20App%20-%20Apps%20on%20Google%20Play.htm"
 
+  html_text = requests.get(url, timeout=(3.05, 27)).text
+  soup = BeautifulSoup(html_text, 'html.parser')
+  main = soup.find('main')
 
-class MainScrapper(webapp2.RequestHandler):
-  def get(self):
+  if not test:
+    from models import App
+    obj = App.get_by_key_name(pkg)
+    if obj and obj.last_fetched and obj.last_fetched + timedelta(days=1) > datetime.now():
+      return { "success": "not fetching ", "date": obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S"), "data": serialize_app(obj) }
 
+  try:
+    # print(url)
+    # print(soup.find_all("img", { "alt": re.compile("^Rated for ") }))
 
+    # content_rating = main.select('[alt^="Rated for"]')[0]
+    # content_rating_text = content_rating["alt"]
+    # content_rating_image = content_rating["srcset"]
+    rating = soup.find_all("div", {"aria-label": re.compile(" stars out of five stars$")})[0]["aria-label"]
+    rating = rating.split(" ")[1]
+    rating_count = soup.find_all("span", {"aria-label": re.compile(" ratings$")})[0]["aria-label"]
+    rating_count = rating_count.split(" ")[0]
+  except:
+    rating = ""
+    rating_count = 0
 
-application = webapp2.WSGIApplication([
-  ('/', MainScrapper),
-], debug=True)
+  genre = main.select('[itemprop="genre"]')[0].text
 
+  screenshots = [x.find("img") for x in main.select('[data-screenshot-item-index]') if x]
+  screenshots = map(lambda x: x.get("srcset") and x.get("srcset").split(" ")[0], screenshots)
+
+  description = " ".join([ x.text for x in main.select('[itemprop="description"]') if x.text]).encode('utf-8').strip()
+
+  if not test:
+    from models import App
+    from utils import unic, app_key
+
+    obj = App.get_or_insert(pkg, pkg=pkg)
+    obj.key = app_key(pkg)
+    # obj.content_rating = content_rating
+    # obj.content_rating_text = unic(content_rating_text)
+    # obj.content_rating_image = content_rating_image
+    obj.rating = rating
+    obj.rating_count = rating_count
+    obj.genre = genre
+    obj.screenshots = json.dumps(screenshots)
+    obj.description = unic(description)
+    obj.last_fetched = datetime.now()
+    obj.put()
+    return { "success": "fetching ", "date": obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S"), "data": serialize_app(obj) }
+
+  return pkg
+  # print(screenshots)
 def main():
-    application.run()
+  # Scrapper(True)
+  AppDetailScrapper("com.next.innovation.takatak.lite", True)
 
 if __name__ == "__main__":
-    main()
+  main()

@@ -2,3 +2,7 @@
 
 *.idea
 *.vscode
+
+venv
+
+gae/lib/*
