@@ -1,19 +1,20 @@
-from constants import TOP_APPS_URL, APP_DETAIL_URL
-
-import urlparse
+import logging
+import json
 
 import re
 import requests
-import json
+import urlparse
+
 from serializers import serialize_app
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
+from constants import TOP_APPS_URL, APP_DETAIL_URL, STORE_URL
+from utils import get_html
 
 def TopAppsScrapper(test):
+  logging.info("Starting app scrapper")
 
   try:
-    html_text = requests.get(TOP_APPS_URL).text
-    soup = BeautifulSoup(html_text, 'html.parser')
+    soup = get_html(TOP_APPS_URL)
   except Exception as e:
     return e
 
@@ -72,8 +73,12 @@ def TopAppsScrapper(test):
       except Exception as e:
         return e
 
-      print("\n{} total {}".format(category["title"], len(category["apps"])))
       categories.append(category)
+
+      logging.info("\nFor category {} got {} apps".format(category["title"], len(category["apps"])))
+
+
+  logging.info("Done getting data from scrapper ")
 
   if not test:
     from models import Category, App
@@ -89,7 +94,7 @@ def TopAppsScrapper(test):
         if not cat:
           cat = Category(key=key, slug=slug, title=c["title"])
           cat.view_order = c["view_order"]
-          cat.more_link = "https://play.google.com{}".format(c.get("more_link", ""))
+          cat.more_link = STORE_URL.format(c.get("more_link", ""))
           cat.put()
 
         for app in c["apps"]:
@@ -105,6 +110,7 @@ def TopAppsScrapper(test):
           obj.put()
 
     except Exception as e:
+      logging.error(e)
       return e
     else:
       return categories
@@ -112,25 +118,15 @@ def TopAppsScrapper(test):
 
 def AppDetailScrapper(pkg, test):
   url = APP_DETAIL_URL.format(pkg)
-  # url = "http://127.0.0.1:5501/Josh%20-%20Snack%20on%20Short%20Videos%20with%20Top%20Indian%20App%20-%20Apps%20on%20Google%20Play.htm"
-
-  html_text = requests.get(url, timeout=(3.05, 27)).text
-  soup = BeautifulSoup(html_text, 'html.parser')
-  main = soup.find('main')
-
-  if not test:
-    from models import App
-    obj = App.get_by_key_name(pkg)
-    if obj and obj.last_fetched and obj.last_fetched + timedelta(days=1) > datetime.now():
-      return { "success": "not fetching ", "date": obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S"), "data": serialize_app(obj) }
 
   try:
-    # print(url)
-    # print(soup.find_all("img", { "alt": re.compile("^Rated for ") }))
+    soup = get_html(url)
+  except Exception as e:
+    return e
 
-    # content_rating = main.select('[alt^="Rated for"]')[0]
-    # content_rating_text = content_rating["alt"]
-    # content_rating_image = content_rating["srcset"]
+  main = soup.find('main')
+
+  try:
     rating = soup.find_all("div", {"aria-label": re.compile(" stars out of five stars$")})[0]["aria-label"]
     rating = rating.split(" ")[1]
     rating_count = soup.find_all("span", {"aria-label": re.compile(" ratings$")})[0]["aria-label"]
@@ -152,9 +148,6 @@ def AppDetailScrapper(pkg, test):
 
     obj = App.get_or_insert(pkg, pkg=pkg)
     obj.key = app_key(pkg)
-    # obj.content_rating = content_rating
-    # obj.content_rating_text = unic(content_rating_text)
-    # obj.content_rating_image = content_rating_image
     obj.rating = rating
     obj.rating_count = rating_count
     obj.genre = genre
@@ -162,12 +155,13 @@ def AppDetailScrapper(pkg, test):
     obj.description = unic(description)
     obj.last_fetched = datetime.now()
     obj.put()
+    logging.info("saved new app data {} for {}".format(pkg, obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S")))
     return { "success": "fetching ", "date": obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S"), "data": serialize_app(obj) }
 
   return pkg
-  # print(screenshots)
+
 def main():
-  # Scrapper(True)
+  Scrapper(True)
   AppDetailScrapper("com.next.innovation.takatak.lite", True)
 
 if __name__ == "__main__":

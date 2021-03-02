@@ -1,9 +1,15 @@
+from datetime import datetime, timedelta
+
 import webapp2
 import json
+import logging
 
 from models import Category, App
+
+import scrapper
 from utils import *
-from serializers import serialize_app_list_item, serialize_category
+from serializers import serialize_app_list_item, serialize_category, serialize_app
+
 class CategoryHandler(webapp2.RequestHandler):
     def post(self):
         try:
@@ -50,12 +56,24 @@ class CategoryGetHandler(webapp2.RequestHandler):
 
 class TopAppsScraperHandler(webapp2.RequestHandler):
     def get(self):
+        print(self.request.headers)
+        if "X-Appengine-Cron" in self.request.headers:
+            print("from cron")
+
+        if "X-Appengine-Taskname" in self.request.headers:
+            print("from task")
+
         res = scrapper.TopAppsScrapper(False)
         self.response.write(json.dumps(res))
 
 
 class AppDetailScraperHandler(webapp2.RequestHandler):
     def get(self, pkg):
+        obj = App.get_by_key_name(pkg)
+        if obj and obj.last_fetched and obj.last_fetched + timedelta(days=1) > datetime.now():
+            logging.info("Not fetching new app details for {}, last fetched {}".format(pkg, obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S")))
+            self.response.write({ "success": "not fetching ", "date": obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S"), "data": serialize_app(obj) })
+
         res = scrapper.AppDetailScrapper(pkg, False)
         self.response.write(json.dumps(res))
 

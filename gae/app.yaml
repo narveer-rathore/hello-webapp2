@@ -3,7 +3,5 @@ api_version: 1
 threadsafe: true
 
 handlers:
-# - url: /refresh
-#   script: Scrapper.py
 - url: .*
   script: main.application
