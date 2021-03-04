@@ -4,7 +4,8 @@ def serialize_app(app):
     "pkg": app.pkg,
     "rating": app.rating,
     "image": app.image,
-    "last_fetched": app.last_fetched.strftime("%Y-%m-%d %H:%M:%S")
+    "last_fetched": app.last_fetched.strftime("%Y-%m-%d %H:%M:%S"),
+    "description": app.description.decode('utf-8').strip()
   }
 
 def serialize_category(app):

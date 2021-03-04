@@ -4,11 +4,13 @@ import webapp2
 import json
 import logging
 
+from google.appengine.api import memcache
 from models import Category, App
 
 import scrapper
 from utils import *
 from serializers import serialize_app_list_item, serialize_category, serialize_app
+from constants import SECONDS_IN_DAY
 
 class CategoryHandler(webapp2.RequestHandler):
     def post(self):
@@ -69,33 +71,59 @@ class TopAppsScraperHandler(webapp2.RequestHandler):
 
 class AppDetailScraperHandler(webapp2.RequestHandler):
     def get(self, pkg):
-        obj = App.get_by_key_name(pkg)
-        if obj and obj.last_fetched and obj.last_fetched + timedelta(days=1) > datetime.now():
-            logging.info("Not fetching new app details for {}, last fetched {}".format(pkg, obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S")))
-            self.response.write({ "success": "not fetching ", "date": obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S"), "data": serialize_app(obj) })
+        #memcache
 
-        res = scrapper.AppDetailScrapper(pkg, False)
-        self.response.write(json.dumps(res))
+        try:
+            res = memcache.get(pkg)
+            # print_stats(self)
+
+            if res is None:
+                obj = App.get_by_key_name(pkg)
+                if obj is None or (obj.last_fetched and obj.last_fetched + timedelta(days=1) < datetime.now()):
+                    obj = scrapper.AppDetailScrapper(pkg, False)
+
+                res = serialize_app(obj)
+                added = memcache.add(pkg, res, SECONDS_IN_DAY)
+
+                if not added:
+                    logging.error('Memcache set failed for app {}.'.format(pkg))
+
+            self.response.headers['Content-Type'] = "application/json; charset=utf-8"
+            self.response.write(json.dumps(res))
+
+        except Exception as e:
+            self.response.write(e)
 
 
 class TopAppsGetHandler(webapp2.RequestHandler):
     def get(self):
-        categories = Category.all()
+        try:
+            categories = memcache.get('categories')
 
-        response = []
+            # print_stats(self)
 
-        for cat in categories:
-            category = serialize_category(cat)
-            d = db.GqlQuery("SELECT * FROM App WHERE category = :1 ORDER by last_fetched limit 5 ", cat)
-            # data = App.gql("category_apps = 'com.fingersoft.hillclimb'").get()
-            apps = []
-            for a in d:
-                apps.append(serialize_app_list_item(a))
-            category["apps"] = apps
-            response.append(category)
+            if categories is None:
+                logging.info("memcache miss for categories")
+                categoriesObj = Category.all()
+                categories = []
+
+                for cat in categoriesObj:
+                    category = serialize_category(cat)
+                    d = db.GqlQuery("SELECT * FROM App WHERE category = :1 ORDER by last_fetched limit 5", cat)
+                    apps = []
+                    for a in d:
+                        apps.append(serialize_app_list_item(a))
+                    category["apps"] = apps
+                    categories.append(category)
+
+                added = memcache.add("categories", categories, SECONDS_IN_DAY)
+
+                if not added:
+                    logging.error('Memcache set failed for categories.')
+
+        except Exception as e:
+            self.response.write(e)
 
         self.response.write({
-            "data": response
+            "data": categories
         })
-
-

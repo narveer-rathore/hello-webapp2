@@ -158,7 +158,7 @@ def AppDetailScrapper(pkg, test):
     logging.info("saved new app data {} for {}".format(pkg, obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S")))
     return { "success": "fetching ", "date": obj.last_fetched.strftime("%Y-%m-%d %H:%M:%S"), "data": serialize_app(obj) }
 
-  return pkg
+  return obj
 
 def main():
   Scrapper(True)

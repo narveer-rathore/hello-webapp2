@@ -16,6 +16,8 @@ application = webapp2.WSGIApplication([
     webapp2.Route(r'/', handler=MainPage, name='root', methods=['GET']),
 
     webapp2.Route(r'/refresh', handler=top_apps, name='root_tasks', methods=['GET']),
+
+    #bigquery
     webapp2.Route(r'/tasks/top', handler=TopAppsScraperHandler, name="top_category_scrapper", methods=['GET']),
 
     webapp2.Route(r'/top', handler=TopAppsGetHandler, name="top_category_apps", methods=['GET']),
