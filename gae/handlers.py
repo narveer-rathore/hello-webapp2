@@ -12,6 +12,10 @@ from utils import *
 from serializers import serialize_app_list_item, serialize_category, serialize_app
 from constants import SECONDS_IN_DAY
 
+from google.cloud import bigquery
+
+client = bigquery.Client()
+
 class CategoryHandler(webapp2.RequestHandler):
     def post(self):
         try:
@@ -34,7 +38,6 @@ class CategoryHandler(webapp2.RequestHandler):
                 }))
         except Exception as e:
             self.response.write(str(e))
-
 
 class CategoryGetHandler(webapp2.RequestHandler):
     def get(self, slug):
@@ -59,6 +62,7 @@ class CategoryGetHandler(webapp2.RequestHandler):
 class TopAppsScraperHandler(webapp2.RequestHandler):
     def get(self):
         print(self.request.headers)
+
         if "X-Appengine-Cron" in self.request.headers:
             print("from cron")
 
@@ -66,7 +70,8 @@ class TopAppsScraperHandler(webapp2.RequestHandler):
             print("from task")
 
         res = scrapper.TopAppsScrapper(False)
-        self.response.write(json.dumps(res))
+        o = json.dumps(res)
+        self.response.write(o)
 
 
 class AppDetailScraperHandler(webapp2.RequestHandler):
@@ -76,11 +81,13 @@ class AppDetailScraperHandler(webapp2.RequestHandler):
         try:
             res = memcache.get(pkg)
             # print_stats(self)
-
+            source = "memcache"
             if res is None:
                 obj = App.get_by_key_name(pkg)
+                source = "db"
                 if obj is None or (obj.last_fetched and obj.last_fetched + timedelta(days=1) < datetime.now()):
                     obj = scrapper.AppDetailScrapper(pkg, False)
+                    source = "scrapper"
 
                 res = serialize_app(obj)
                 added = memcache.add(pkg, res, SECONDS_IN_DAY)
@@ -89,7 +96,17 @@ class AppDetailScraperHandler(webapp2.RequestHandler):
                     logging.error('Memcache set failed for app {}.'.format(pkg))
 
             self.response.headers['Content-Type'] = "application/json; charset=utf-8"
-            self.response.write(json.dumps(res))
+            o = json.dumps(res)
+            ip = self.request.headers["X-Appengine-User-IP"] if X-Appengine-User-IP in self.request.headers else "0.0.0.0"
+            q = """
+                INSERT INTO 'hello-webapp2-1994.app_hits.app_detail'
+                (app_id, request_date, source, country, ip, created_at)
+                VALUES({}, {}, {}, {}, {}, {})
+            """.format(pkg, datetime.now(), source, self.request.headers["X-Appengine-Country"], ip, datetime.now())
+
+            query_job = client.query(q)
+            print(query_job)
+            self.response.write(o)
 
         except Exception as e:
             self.response.write(e)
